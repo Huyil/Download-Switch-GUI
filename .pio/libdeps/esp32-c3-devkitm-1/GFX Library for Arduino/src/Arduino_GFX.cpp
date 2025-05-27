@@ -1608,6 +1608,38 @@ void Arduino_GFX::draw16bitBeRGBBitmap(int16_t x, int16_t y,
   endWrite();
 }
 
+void Arduino_GFX::drawGrayWithColorBitmap(int16_t x, int16_t y, uint8_t *bmp, uint16_t overlayColor, int16_t w, int16_t h)
+{
+  int32_t offset = 0;
+  startWrite();
+  for (int16_t j = 0; j < h; j++, y++)
+  {
+    for (int16_t i = 0; i < w; i++)
+    {
+      uint8_t gray = bmp[offset++];  // 0-255灰度
+
+      // 将overlayColor拆成R,G,B分量（5/6/5）
+      uint8_t or5 = (overlayColor >> 11) & 0x1F; // 5 bit red
+      uint8_t og6 = (overlayColor >> 5) & 0x3F;  // 6 bit green
+      uint8_t ob5 = overlayColor & 0x1F;         // 5 bit blue
+
+      // 将灰度转换为权重0-1范围（float 或 int比率）
+      float alpha = gray / 255.0f;
+
+      // 混合颜色 = 灰度 * overlayColor
+      // 这里简单用灰度作为alpha混合，背景黑色（0）
+      uint8_t r5 = (uint8_t)(or5 * alpha);
+      uint8_t g6 = (uint8_t)(og6 * alpha);
+      uint8_t b5 = (uint8_t)(ob5 * alpha);
+
+      uint16_t color16 = (r5 << 11) | (g6 << 5) | b5;
+
+      writePixel(x + i, y, color16);
+    }
+  }
+  endWrite();
+}
+
 #if !defined(LITTLE_FOOT_PRINT)
 /**************************************************************************/
 /*!
