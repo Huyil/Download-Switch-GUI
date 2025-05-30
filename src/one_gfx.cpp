@@ -1,7 +1,5 @@
 #include "one_gfx.h"
-#include <Arduino_GFX_Library.h>
 // #include <font/FreeMono9pt7b.h>   // 引入字体头文件
-#include <LittleFS.h>
 #include "BmpClass.h"
 
 static BmpClass bmpClass;
@@ -16,24 +14,48 @@ Arduino_GFX *gfx = new Arduino_ST7735(bus, 3 /* RST */, 1 /* rotation */, false 
 #define ASCII_OFFSET 0x20
 #define FONT_FILE "/font16x8.bin"
 
+
+struct IconEntry {
+  uint8_t index;        // 图标序号
+  const char* label;    // 显示的文字
+  uint16_t color;       // 文件名
+  bool lock;
+};
+
 #define ICON_WIDTH 18
 #define ICON_HEIGHT 18
 #define ICON_COUNT 4
-
-struct IconEntry {
-  uint8_t index;      // 图标序号
-  const char* name;   // 文件名
-  const char* label;    // 显示的文字
-  File file;          // LittleFS 返回的 File 对象
+struct IconSignal
+{
+  struct IconEntry Info[ICON_COUNT];
+  String bmpName;
+  String bmpLockName;
+  uint8_t bmp[ICON_WIDTH*ICON_HEIGHT];
+  uint8_t bmpLock[ICON_WIDTH*ICON_HEIGHT];
+  
+  uint8_t width, height;
 };
 
 // 图标信息数组
-IconEntry icons[ICON_COUNT] = {
-  {0, "/LEDR.bmp", "VCC", File()},
-  {1, "/LEDG.bmp", "SCK", File()},
-  {2, "/LEDB.bmp", "GND", File()},
-  {3, "/LEDP.bmp", "SDA", File()},
+struct IconSignal signalIO = {
+  .Info={
+    {0, "VCC", RGB565(255,0,0)},
+    {1, "SCK", RGB565(0,255,0)},
+    {2, "GND", RGB565(0,0,255)},
+    {3, "SDA", RGB565(255,0,255)},
+  },
+  .bmpName = "/signal.bmp",
+  .bmpLockName = "/signalLock.bmp",
+  .width = ICON_WIDTH,
+  .height = ICON_HEIGHT
 };
+
+struct BMPGray8 {
+  uint8_t* pixels = nullptr;
+  uint16_t width = 0;
+  uint16_t height = 0;
+};
+
 void initIcons(void);
 void refreshIcons(void);
 
@@ -45,19 +67,19 @@ static void bmpDrawCallback(int16_t x, int16_t y, uint16_t *bitmap, int16_t w, i
   gfx->draw16bitRGBBitmap(x, y, bitmap, w, h);
 }
 
-static void bmpDrawGray8WithColor(int16_t x, int16_t y, const char* path, uint16_t color)
+bool loadBMPGray8(const char* path, BMPGray8& outBmp, float scale = 1.0f, size_t bufSize = 0)
 {
   File f = LittleFS.open(path, "r");
   if (!f) {
     Serial.printf("Failed to open BMP file: %s\n", path);
-    return;
+    return false;
   }
 
   uint8_t header[54];
   if (f.read(header, 54) != 54 || header[0] != 'B' || header[1] != 'M') {
     Serial.println("Invalid BMP file.");
     f.close();
-    return;
+    return false;
   }
 
   uint16_t width  = header[18] | (header[19] << 8);
@@ -68,42 +90,98 @@ static void bmpDrawGray8WithColor(int16_t x, int16_t y, const char* path, uint16
   if (bpp != 8) {
     Serial.printf("Unsupported BMP format (must be 8bpp): %d bpp\n", bpp);
     f.close();
-    return;
+    return false;
   }
 
-  uint32_t rowSize = (width + 3) & ~3; // 行数据4字节对齐
+  uint32_t rowSize = (width + 3) & ~3;
+  size_t rawPixelCount = (size_t)width * height;
 
-  uint8_t* grayBuf = (uint8_t*)malloc(width * height);
-  if (!grayBuf) {
-    Serial.println("malloc failed for grayBuf.");
+  uint8_t* rawBuf = (uint8_t*)malloc(rawPixelCount);
+  if (!rawBuf) {
+    Serial.println("malloc failed for rawBuf.");
     f.close();
-    return;
+    return false;
   }
 
   uint8_t* rowBuf = (uint8_t*)malloc(rowSize);
   if (!rowBuf) {
     Serial.println("malloc failed for rowBuf.");
-    free(grayBuf);
+    free(rawBuf);
     f.close();
-    return;
+    return false;
   }
 
-  // BMP 行是倒序存储，从底向上
   for (uint16_t yRow = 0; yRow < height; yRow++) {
     f.seek(offset + (height - 1 - yRow) * rowSize);
     f.read(rowBuf, rowSize);
-    memcpy(&grayBuf[yRow * width], rowBuf, width);
+    memcpy(&rawBuf[yRow * width], rowBuf, width);
   }
 
-  // 显示图像
-  gfx->drawGrayWithColorBitmap(x, y, grayBuf, color, width, height);
-
   free(rowBuf);
-  free(grayBuf);
   f.close();
+
+  if (scale == 1.0f) {
+    // 直接使用原图数据
+    if (outBmp.pixels != nullptr && bufSize >= rawPixelCount) {
+      memcpy(outBmp.pixels, rawBuf, rawPixelCount);
+      free(rawBuf);  // 原始数据复制完就可以释放
+    } else {
+      outBmp.pixels = rawBuf; // 直接使用原始内存
+    }
+    outBmp.width = width;
+    outBmp.height = height;
+    return true;
+  }
+
+  // 否则进行缩放
+  uint16_t dstW = max((uint16_t)1, (uint16_t)(width * scale));
+  uint16_t dstH = max((uint16_t)1, (uint16_t)(height * scale));
+  size_t dstSize = (size_t)dstW * dstH;
+
+  uint8_t* outBuf = outBmp.pixels;
+  bool useExternal = (outBuf != nullptr && bufSize >= dstSize);
+
+  if (!useExternal) {
+    outBuf = (uint8_t*)malloc(dstSize);
+    if (!outBuf) {
+      Serial.println("malloc failed for scaled buffer.");
+      free(rawBuf);
+      return false;
+    }
+  }
+
+  // 最近邻缩放
+  for (uint16_t y = 0; y < dstH; ++y) {
+    uint16_t srcY = min((uint16_t)(y / scale), (uint16_t)(height - 1));
+    for (uint16_t x = 0; x < dstW; ++x) {
+      uint16_t srcX = min((uint16_t)(x / scale), (uint16_t)(width - 1));
+      outBuf[y * dstW + x] = rawBuf[srcY * width + srcX];
+    }
+  }
+
+  free(rawBuf);
+
+  outBmp.pixels = outBuf;
+  outBmp.width = dstW;
+  outBmp.height = dstH;
+  return true;
 }
 
-static void bmpStringWithColor(uint8_t Stax, uint8_t Stay, const String& str)
+
+
+static void bmpDrawGray8WithColor(int16_t x, int16_t y, const char* path, uint16_t color,float scale=1.0f)
+{
+  BMPGray8 bmp;
+  if (!loadBMPGray8(path, bmp, scale)) {
+    Serial.println("Failed to load BMP.");
+    return;
+  }
+
+  gfx->drawGrayWithColorBitmap(x, y, bmp.pixels, color, bmp.width, bmp.height);
+  free(bmp.pixels); // 注意释放内存
+}
+
+static void bmpStringWithColor(uint8_t Stax, uint8_t Stay, const String str)
 {
   File fontFile = LittleFS.open(FONT_FILE, "r");
   if (!fontFile) {
@@ -151,45 +229,101 @@ void lcd_init(){
   }else{
     initIcons();
     refreshIcons();
-    #define ArrowX 100
-    #define ArrowY 10
-    bmpDrawGray8WithColor(ArrowX+20, ArrowY,    "/arrowU.bmp", RGB565_WHITE);
-    bmpDrawGray8WithColor(ArrowX+20, ArrowY+40, "/arrowD.bmp", RGB565_WHITE);
-    bmpDrawGray8WithColor(ArrowX,    ArrowY+20, "/arrowL.bmp", RGB565_WHITE);
-    bmpDrawGray8WithColor(ArrowX+40, ArrowY+20, "/arrowR.bmp", RGB565_WHITE);
-    bmpDrawGray8WithColor(ArrowX+22, ArrowY+22, "/arrowM.bmp", RGB565(102, 204, 255));
+    showArrow(0x0F);
+    showBattery(0);
+    showLinkState(0);
+    
+    bmpDrawGray8WithColor(160-16,9,"/wifi.bmp", RGB565_WHITE);
+    bmpDrawGray8WithColor(160-13,80-14, "/setting.bmp", RGB565_WHITE);
   }
 }
 
 void initIcons(void) {
-  for (int i = 0; i < ICON_COUNT; i++) {
-    icons[i].file = LittleFS.open(icons[i].name, "r");
-
-    if (!icons[i].file) {
-      Serial.printf("Failed to open: %s\n", icons[i].name);
-    }
-  }
+  BMPGray8 _bmp;
+  _bmp.pixels = signalIO.bmp;
+  loadBMPGray8(signalIO.bmpName.c_str(),_bmp, 1.0, sizeof(signalIO.bmp));
+  
+  _bmp.pixels = signalIO.bmpLock;
+  loadBMPGray8(signalIO.bmpLockName.c_str(),_bmp, 1.0, sizeof(signalIO.bmpLock));
 }
 
 void refreshIcons() {
   for (int i = 0; i < ICON_COUNT; i++) {
     int x = 0;
     int y = i * 20;
+    gfx->drawGrayWithColorBitmap(x, y, 
+      signalIO.Info[i].lock ? signalIO.bmpLock : signalIO.bmp,
+      signalIO.Info[i].color, signalIO.width, signalIO.height);
 
-    if (icons[i].file) {
-      icons[i].file.seek(0);  // 重置文件指针
-      bmpClass.draw(
-        &icons[i].file,
-        bmpDrawCallback,
-        false,          // 不使用大端
-        x, y,           // 显示坐标
-        ICON_WIDTH, ICON_HEIGHT          // 限制区域范围
-      );
-    }
-    
-    // 绘制文字（在图标右边 22 像素开始，保持对齐）
-    // gfx->setCursor(22, y + 14);  // +4 为垂直居中调节
-    // gfx->print(icons[i].label);
-    bmpStringWithColor(22, y, String(icons[i].label));
+    bmpStringWithColor(22, y, String(signalIO.Info[i].label));
   }
+}
+
+#define ArrowX 60
+#define ArrowY 20
+void showArrow(uint8_t key)
+{
+    bmpDrawGray8WithColor(ArrowX+18, ArrowY,    "/arrowU.bmp", (key&0x01)?RGB565_WHITE:RGB565(102, 204, 255));
+    bmpDrawGray8WithColor(ArrowX+36, ArrowY+18, "/arrowR.bmp", (key&0x02)?RGB565_WHITE:RGB565(102, 204, 255));
+    bmpDrawGray8WithColor(ArrowX,    ArrowY+18, "/arrowL.bmp", (key&0x04)?RGB565_WHITE:RGB565(102, 204, 255));
+    bmpDrawGray8WithColor(ArrowX+18, ArrowY+36, "/arrowD.bmp", (key&0x08)?RGB565_WHITE:RGB565(102, 204, 255));
+    bmpDrawGray8WithColor(ArrowX+20, ArrowY+20, "/arrowM.bmp", (key&0x10)?RGB565_WHITE:RGB565(102, 204, 255));
+}
+
+#define BATX 160-13
+#define BATY 0
+void showBattery(uint8_t level)
+{
+  static uint8_t lastLevel = 0xFF;
+  if (level == lastLevel) return;
+  lastLevel = level;
+
+  const uint8_t x = BATX;
+  const uint8_t y = BATY;
+
+  if (level > 5) {
+    gfx->fillRect(x, y, 12, 8, RGB565_BLACK);
+    return;
+  }
+
+  BMPGray8 bmp;
+  if (!loadBMPGray8("/battery.bmp", bmp)) {
+    Serial.println("Failed to load battery.bmp");
+    return;
+  }
+
+  if (bmp.width < 10 || bmp.height < 6 || !bmp.pixels) {
+    free(bmp.pixels);
+    return;
+  }
+
+  // 需要隐藏的电池格起始索引
+  const struct { uint8_t x0, y0, x1, y1; } cells[4] = {
+    {2, 2, 3, 5},
+    {4, 2, 5, 5},
+    {6, 2, 7, 5},
+    {8, 2, 9, 5},
+  };
+
+  int hideStart = 0;
+  if (level == 0) hideStart = 0;
+  else if (level == 1) hideStart = 1;
+  else if (level <= 4) hideStart = level;
+  else hideStart = 4;
+
+  for (int i = hideStart; i < 4; ++i) {
+    for (uint8_t yy = cells[i].y0; yy <= cells[i].y1; ++yy) {
+      for (uint8_t xx = cells[i].x0; xx <= cells[i].x1; ++xx) {
+        bmp.pixels[yy * bmp.width + xx] = 0; // 灰度0 = 黑色
+      }
+    }
+  }
+
+  gfx->drawGrayWithColorBitmap(x, y, bmp.pixels, 0xFFFF, bmp.width, bmp.height);
+  free(bmp.pixels);
+}
+
+void showLinkState(bool sw)
+{
+  bmpDrawGray8WithColor(160-16,22,sw?"/link.bmp":"/download.bmp", RGB565_WHITE);
 }
