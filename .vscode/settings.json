@@ -290,6 +290,10 @@
   "C_Cpp_Runner.showCompilationTime": false,
   "C_Cpp_Runner.useLinkTimeOptimization": false,
   "files.associations": {
-    "fstream": "cpp"
+    "fstream": "cpp",
+    "typeinfo": "cpp",
+    "assert.h": "c",
+    "one_gui.h": "c",
+    "one_gfx.h": "c"
   }
 }

@@ -11,6 +11,7 @@ typedef struct{
 }MY_WIFI_CFG;
 
 typedef struct{
+    bool (*isconnected)(void);
     void (*connect)(void);
     void (*setSSID)(String ssid, String passwd);
 }MY_WIFI_OPS;

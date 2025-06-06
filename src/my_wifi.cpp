@@ -5,52 +5,34 @@ IPAddress local_IP(192, 168, 5, 254);
 IPAddress gateway(192, 168, 5, 1);
 IPAddress subnet(255, 255, 248, 0); // /21 子网
 
-static void connectWF(void){
-    int count = 1;
-    WiFi.config(local_IP, gateway, subnet);
-    WiFi.begin(my_wifi.cfg->name, my_wifi.cfg->passwd);
-    Serial.print("连接到wifi [" + my_wifi.cfg->name + "]");
-    while (WiFi.status() != WL_CONNECTED) {
-        count ++;
-        // if(Serial.available()){
-        //     String getString = Serial.readString();
-        //     if(getString == "del")
-        //         my_fs.ops->clean("/config.json");
-        //     else Serial.println("当前输入:"+getString+"\n输入del清除配置:");
-        // }
-        // if(count % 100 == 0){
-        //     Serial.print(".");
-        // }
-        // if (count == 25000){
-        //     // count = 0;
-        //     Serial.println("WIFI连接超时!请检查wifi配置");
-        //     Serial.println("WIFI名["+my_wifi.cfg->name+"]");
-        //     Serial.println("WIFI密码["+my_wifi.cfg->passwd+"]");
-        //     WiFi.begin(my_wifi.cfg->name, my_wifi.cfg->passwd);
-        //     Serial.print("连接到wifi [" + my_wifi.cfg->name + "]");
-        //     // while (Serial.available() == 0){
-        //     //     Serial.print(".");
-        //     //     delay(500);
-        //     // }
-        // }
-        
-        delay(1);
-        if(count >= 50000){
-            count = 0;
-            Serial.println("WIFI连接失败!正在重启ESP32");
-            pinMode(2, OUTPUT);
-            digitalWrite(2,0);      //释放IO2
-            delay(100);
-            ESP.restart();
-        }
-    }
+// 回调函数，监听WiFi事件
+void WiFiEvent(WiFiEvent_t event) {
+  switch(event) {
+    case SYSTEM_EVENT_STA_GOT_IP:
+      Serial.println("WiFi 已连接");
+      Serial.print("IP 地址: ");
+      Serial.println(WiFi.localIP());
+      // 这里可以更新状态，比如调用showWifiState(true);
+      break;
+    case SYSTEM_EVENT_STA_DISCONNECTED:
+      Serial.println("WiFi 断开连接，正在重连...");
+      WiFi.reconnect();  // 自动重连
+      // 这里可以更新状态，比如调用showWifiState(false);
+      break;
+    default:
+      break;
+  }
+}
 
-    my_wifi.cfg->ip = WiFi.localIP().toString();
-    Serial.println("");
-    Serial.println("WIFI已连接");
-    Serial.print("IP: ");
-    Serial.println(WiFi.localIP());
-    delay(200);
+static void connectWF(void) {
+    WiFi.config(local_IP, gateway, subnet);
+    WiFi.onEvent(WiFiEvent);   // 注册事件回调
+    WiFi.begin(my_wifi.cfg->name.c_str(), my_wifi.cfg->passwd.c_str());
+
+    Serial.print("尝试连接WiFi: ");
+    Serial.println(my_wifi.cfg->name);
+
+    // 不阻塞，直接返回，连接状态由回调管理
 }
 
 static void setSSIDPasswd(String ssid, String passwd)
@@ -59,7 +41,12 @@ static void setSSIDPasswd(String ssid, String passwd)
     my_wifi.cfg->passwd = passwd;
 }
 
+static bool isConnected(void) {
+    return WiFi.isConnected();
+}
+
 static MY_WIFI_OPS ops = {
+    .isconnected = isConnected,
     .connect = connectWF,
     .setSSID = setSSIDPasswd,
 };

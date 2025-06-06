@@ -7,6 +7,20 @@ static BmpClass bmpClass;
 #define GFX_BL 10
 Arduino_DataBus *bus = new Arduino_ESP32SPI(2 /* DC */, 4 /* CS */, 1 /* SCK */,0 /* MOSI */, GFX_NOT_DEFINED /* MISO */);
 Arduino_GFX *gfx = new Arduino_ST7735(bus, 3 /* RST */, 1 /* rotation */, false /* IPS */,80 /* width */, 160 /* height */,24 /* col offset 1 */, 0 /* row offset 1 */,24 /* col offset 2 */, 0 /* row offset 2 */);
+GUIManager gui(gfx);  // 创建 GUI 管理器对象，传入 gfx 实例
+
+void initIcons(void);
+void refreshIcons(void);
+void GUIElement::draw(){
+    if (isShow) {
+        gui.bmpDrawGray8WithColor(this);
+        
+        // 如果是当前选中元素则绘制选择框
+        if (gui.currentSelected == this) {
+            //gui.drawSelectionBox(this);
+        }
+    }
+}
 
 #define FONT_WIDTH 8
 #define FONT_HEIGHT 16
@@ -49,16 +63,6 @@ struct IconSignal signalIO = {
   .width = ICON_WIDTH,
   .height = ICON_HEIGHT
 };
-
-struct BMPGray8 {
-  uint8_t* pixels = nullptr;
-  uint16_t width = 0;
-  uint16_t height = 0;
-};
-
-void initIcons(void);
-void refreshIcons(void);
-
 
 // pixel drawing callback
 static void bmpDrawCallback(int16_t x, int16_t y, uint16_t *bitmap, int16_t w, int16_t h)
@@ -150,12 +154,33 @@ bool loadBMPGray8(const char* path, BMPGray8& outBmp, float scale = 1.0f, size_t
     }
   }
 
-  // 最近邻缩放
+  // 双线性插值缩放
   for (uint16_t y = 0; y < dstH; ++y) {
-    uint16_t srcY = min((uint16_t)(y / scale), (uint16_t)(height - 1));
+    float srcY = y / scale;
+    int y0 = floor(srcY);
+    int y1 = min(y0 + 1, height - 1);
+    float yLerp = srcY - y0;
+
     for (uint16_t x = 0; x < dstW; ++x) {
-      uint16_t srcX = min((uint16_t)(x / scale), (uint16_t)(width - 1));
-      outBuf[y * dstW + x] = rawBuf[srcY * width + srcX];
+      float srcX = x / scale;
+      int x0 = floor(srcX);
+      int x1 = min(x0 + 1, width - 1);
+      float xLerp = srcX - x0;
+
+      // 取四个邻近像素
+      uint8_t p00 = rawBuf[y0 * width + x0];
+      uint8_t p01 = rawBuf[y0 * width + x1];
+      uint8_t p10 = rawBuf[y1 * width + x0];
+      uint8_t p11 = rawBuf[y1 * width + x1];
+
+      // 水平插值
+      float top = p00 + (p01 - p00) * xLerp;
+      float bottom = p10 + (p11 - p10) * xLerp;
+
+      // 垂直插值
+      float value = top + (bottom - top) * yLerp;
+
+      outBuf[y * dstW + x] = (uint8_t)value;
     }
   }
 
@@ -165,23 +190,61 @@ bool loadBMPGray8(const char* path, BMPGray8& outBmp, float scale = 1.0f, size_t
   outBmp.width = dstW;
   outBmp.height = dstH;
   return true;
+
 }
 
 
-
-static void bmpDrawGray8WithColor(int16_t x, int16_t y, const char* path, uint16_t color,float scale=1.0f)
+void GUIManager::bmpDrawGray8WithColor(GUIElement* picObj)
 {
-  BMPGray8 bmp;
-  if (!loadBMPGray8(path, bmp, scale)) {
-    Serial.println("Failed to load BMP.");
-    return;
-  }
+    if (!picObj || !picObj->info.path) {
+        Serial.println("Invalid element");
+        return;
+    }
 
-  gfx->drawGrayWithColorBitmap(x, y, bmp.pixels, color, bmp.width, bmp.height);
-  free(bmp.pixels); // 注意释放内存
+    if (!picObj->isRefresh)
+        return;
+
+    picObj->isRefresh = false;
+
+    if (picObj->isLoad && picObj->info.buffer) {
+        gfx->drawGrayWithColorBitmap(picObj->x, picObj->y, picObj->info.buffer, picObj->isSelected?RGB565_CYAN:picObj->color,
+                                     picObj->info.width, picObj->info.height);
+        return;
+    }
+
+    BMPGray8 bmp;
+    if (picObj->info.buffer) {
+        bmp.pixels = (uint8_t*)picObj->info.buffer;
+    }
+
+    if (!loadBMPGray8(picObj->info.path, bmp, picObj->info.scale, picObj->info.bufferSize)) {
+        Serial.println("Failed to load BMP");
+        return;
+    }
+
+    picObj->info.width = bmp.width;
+    picObj->info.height = bmp.height;
+
+    if(picObj->isShow){
+      gfx->drawGrayWithColorBitmap(picObj->x, picObj->y, bmp.pixels, picObj->isSelected?RGB565_CYAN:picObj->color,
+                                 picObj->info.width, picObj->info.height);
+    }
+
+    if (!picObj->info.buffer || bmp.pixels != picObj->info.buffer) {
+        free(bmp.pixels);
+        bmp.pixels = nullptr;
+    } else {
+        picObj->isLoad = 1;
+    }
 }
 
-static void bmpStringWithColor(uint8_t Stax, uint8_t Stay, const String str)
+void GUIManager::bmpDrawGray8WithColor(int16_t x, int16_t y, const char* path, uint16_t color, float scale)
+{
+    GUIElement temp(x, y, path,0 , color, scale);
+    bmpDrawGray8WithColor(&temp);
+}
+
+void GUIManager::bmpStringWithColor(uint8_t Stax, uint8_t Stay, const String str,uint16_t color)
 {
   File fontFile = LittleFS.open(FONT_FILE, "r");
   if (!fontFile) {
@@ -201,14 +264,14 @@ static void bmpStringWithColor(uint8_t Stax, uint8_t Stay, const String str)
     fontFile.seek(offset, SeekSet);
     fontFile.read(fontBuf, CHAR_BYTES);
 
-    gfx->drawGrayWithColorBitmap(Stax, Stay, fontBuf, RGB565_WHITE, FONT_WIDTH, FONT_HEIGHT);
+    gfx->drawGrayWithColorBitmap(Stax, Stay, fontBuf, color, FONT_WIDTH, FONT_HEIGHT);
     Stax += 9; // 每个字符之间的间隔
   }
 
   fontFile.close(); // 关闭文件
 }
 
-void lcd_init(){
+void GUIManager::lcd_init(){
   // Init Display
   if (!gfx->begin())
   {
@@ -229,13 +292,20 @@ void lcd_init(){
   }else{
     initIcons();
     refreshIcons();
-    showArrow(0x0F);
-    showBattery(0);
-    showLinkState(0);
-    
-    bmpDrawGray8WithColor(160-16,9,"/wifi.bmp", RGB565_WHITE);
-    bmpDrawGray8WithColor(160-13,80-14, "/setting.bmp", RGB565_WHITE);
   }
+}
+
+void GUIManager::drawSelectionBox(GUIElement* elem){
+    if (!elem) return;
+    
+    // 绘制选择框 (x-1, y-1, x+w, y+h)
+    gfx->drawRect(
+        elem->x, 
+        elem->y, 
+        elem->info.width,  // 宽度包含两侧边框
+        elem->info.height, // 高度包含两侧边框
+        RGB565_RED        // 红色
+    );
 }
 
 void initIcons(void) {
@@ -255,75 +325,6 @@ void refreshIcons() {
       signalIO.Info[i].lock ? signalIO.bmpLock : signalIO.bmp,
       signalIO.Info[i].color, signalIO.width, signalIO.height);
 
-    bmpStringWithColor(22, y, String(signalIO.Info[i].label));
+    gui.bmpStringWithColor(22, y, String(signalIO.Info[i].label),RGB565_WHITE);
   }
-}
-
-#define ArrowX 60
-#define ArrowY 20
-void showArrow(uint8_t key)
-{
-    bmpDrawGray8WithColor(ArrowX+18, ArrowY,    "/arrowU.bmp", (key&0x01)?RGB565_WHITE:RGB565(102, 204, 255));
-    bmpDrawGray8WithColor(ArrowX+36, ArrowY+18, "/arrowR.bmp", (key&0x02)?RGB565_WHITE:RGB565(102, 204, 255));
-    bmpDrawGray8WithColor(ArrowX,    ArrowY+18, "/arrowL.bmp", (key&0x04)?RGB565_WHITE:RGB565(102, 204, 255));
-    bmpDrawGray8WithColor(ArrowX+18, ArrowY+36, "/arrowD.bmp", (key&0x08)?RGB565_WHITE:RGB565(102, 204, 255));
-    bmpDrawGray8WithColor(ArrowX+20, ArrowY+20, "/arrowM.bmp", (key&0x10)?RGB565_WHITE:RGB565(102, 204, 255));
-}
-
-#define BATX 160-13
-#define BATY 0
-void showBattery(uint8_t level)
-{
-  static uint8_t lastLevel = 0xFF;
-  if (level == lastLevel) return;
-  lastLevel = level;
-
-  const uint8_t x = BATX;
-  const uint8_t y = BATY;
-
-  if (level > 5) {
-    gfx->fillRect(x, y, 12, 8, RGB565_BLACK);
-    return;
-  }
-
-  BMPGray8 bmp;
-  if (!loadBMPGray8("/battery.bmp", bmp)) {
-    Serial.println("Failed to load battery.bmp");
-    return;
-  }
-
-  if (bmp.width < 10 || bmp.height < 6 || !bmp.pixels) {
-    free(bmp.pixels);
-    return;
-  }
-
-  // 需要隐藏的电池格起始索引
-  const struct { uint8_t x0, y0, x1, y1; } cells[4] = {
-    {2, 2, 3, 5},
-    {4, 2, 5, 5},
-    {6, 2, 7, 5},
-    {8, 2, 9, 5},
-  };
-
-  int hideStart = 0;
-  if (level == 0) hideStart = 0;
-  else if (level == 1) hideStart = 1;
-  else if (level <= 4) hideStart = level;
-  else hideStart = 4;
-
-  for (int i = hideStart; i < 4; ++i) {
-    for (uint8_t yy = cells[i].y0; yy <= cells[i].y1; ++yy) {
-      for (uint8_t xx = cells[i].x0; xx <= cells[i].x1; ++xx) {
-        bmp.pixels[yy * bmp.width + xx] = 0; // 灰度0 = 黑色
-      }
-    }
-  }
-
-  gfx->drawGrayWithColorBitmap(x, y, bmp.pixels, 0xFFFF, bmp.width, bmp.height);
-  free(bmp.pixels);
-}
-
-void showLinkState(bool sw)
-{
-  bmpDrawGray8WithColor(160-16,22,sw?"/link.bmp":"/download.bmp", RGB565_WHITE);
 }
