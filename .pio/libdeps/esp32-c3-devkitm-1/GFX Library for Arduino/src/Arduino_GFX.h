@@ -221,6 +221,7 @@ public:
   void drawGrayscaleBitmap(int16_t x, int16_t y, const uint8_t bitmap[], const uint8_t mask[], int16_t w, int16_t h);
   void drawGrayscaleBitmap(int16_t x, int16_t y, uint8_t *bitmap, uint8_t *mask, int16_t w, int16_t h);
   void drawGrayWithColorBitmap(int16_t x, int16_t y, uint8_t *bmp, uint16_t overlayColor, int16_t w, int16_t h);
+  void drawGrayWithColorBitmap(int16_t x, int16_t y, uint8_t *bmp, uint16_t overlayColor, uint16_t backgroundColor, int16_t w, int16_t h);
   void draw16bitRGBBitmapWithMask(int16_t x, int16_t y, const uint16_t bitmap[], const uint8_t mask[], int16_t w, int16_t h);
   void draw24bitRGBBitmap(int16_t x, int16_t y, const uint8_t bitmap[], const uint8_t mask[], int16_t w, int16_t h);
   void draw24bitRGBBitmap(int16_t x, int16_t y, uint8_t *bitmap, uint8_t *mask, int16_t w, int16_t h);

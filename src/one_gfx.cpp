@@ -12,14 +12,17 @@ GUIManager gui(gfx);  // 创建 GUI 管理器对象，传入 gfx 实例
 void initIcons(void);
 void refreshIcons(void);
 void GUIElement::draw(){
-    if (isShow) {
-        gui.bmpDrawGray8WithColor(this);
-        
-        // 如果是当前选中元素则绘制选择框
-        if (gui.currentSelected == this) {
-            //gui.drawSelectionBox(this);
-        }
+    gui.bmpDrawGray8WithColor(this); 
+    // 如果是当前选中元素则绘制选择框
+    if (gui.currentSelected == this) {
+          //gui.drawSelectionBox(this);
     }
+}
+void GUIElement::clear(){
+  // isShow=0;
+  // isRefresh=0;
+  if(color != RGB565_BLACK || isSelected == 1)
+    gfx->fillRect(x, y, info.width, info.height, RGB565_BLACK);
 }
 
 #define FONT_WIDTH 8
@@ -28,41 +31,6 @@ void GUIElement::draw(){
 #define ASCII_OFFSET 0x20
 #define FONT_FILE "/font16x8.bin"
 
-
-struct IconEntry {
-  uint8_t index;        // 图标序号
-  const char* label;    // 显示的文字
-  uint16_t color;       // 文件名
-  bool lock;
-};
-
-#define ICON_WIDTH 18
-#define ICON_HEIGHT 18
-#define ICON_COUNT 4
-struct IconSignal
-{
-  struct IconEntry Info[ICON_COUNT];
-  String bmpName;
-  String bmpLockName;
-  uint8_t bmp[ICON_WIDTH*ICON_HEIGHT];
-  uint8_t bmpLock[ICON_WIDTH*ICON_HEIGHT];
-  
-  uint8_t width, height;
-};
-
-// 图标信息数组
-struct IconSignal signalIO = {
-  .Info={
-    {0, "VCC", RGB565(255,0,0)},
-    {1, "SCK", RGB565(0,255,0)},
-    {2, "GND", RGB565(0,0,255)},
-    {3, "SDA", RGB565(255,0,255)},
-  },
-  .bmpName = "/signal.bmp",
-  .bmpLockName = "/signalLock.bmp",
-  .width = ICON_WIDTH,
-  .height = ICON_HEIGHT
-};
 
 // pixel drawing callback
 static void bmpDrawCallback(int16_t x, int16_t y, uint16_t *bitmap, int16_t w, int16_t h)
@@ -207,7 +175,7 @@ void GUIManager::bmpDrawGray8WithColor(GUIElement* picObj)
     picObj->isRefresh = false;
 
     if (picObj->isLoad && picObj->info.buffer) {
-        gfx->drawGrayWithColorBitmap(picObj->x, picObj->y, picObj->info.buffer, picObj->isSelected?RGB565_CYAN:picObj->color,
+        gfx->drawGrayWithColorBitmap(picObj->x, picObj->y, picObj->info.buffer, picObj->isSelected?RGB565_PALERED:picObj->color,
                                      picObj->info.width, picObj->info.height);
         return;
     }
@@ -226,7 +194,7 @@ void GUIManager::bmpDrawGray8WithColor(GUIElement* picObj)
     picObj->info.height = bmp.height;
 
     if(picObj->isShow){
-      gfx->drawGrayWithColorBitmap(picObj->x, picObj->y, bmp.pixels, picObj->isSelected?RGB565_CYAN:picObj->color,
+      gfx->drawGrayWithColorBitmap(picObj->x, picObj->y, bmp.pixels, picObj->isSelected?RGB565_PALERED:picObj->color,
                                  picObj->info.width, picObj->info.height);
     }
 
@@ -284,15 +252,6 @@ void GUIManager::lcd_init(){
   // gfx->setFont(&FreeMono9pt7b);    // 设置字体
   // gfx->setTextColor(WHITE);
   // gfx->setTextSize(1); // 或 gfx->setFont(...); 可设置字体大小
-
-  if (!LittleFS.begin())
-  {
-    Serial.println(F("ERROR: File System Mount Failed!"));
-    gfx->println(F("ERROR: File System Mount Failed!"));
-  }else{
-    initIcons();
-    refreshIcons();
-  }
 }
 
 void GUIManager::drawSelectionBox(GUIElement* elem){
@@ -308,23 +267,45 @@ void GUIManager::drawSelectionBox(GUIElement* elem){
     );
 }
 
-void initIcons(void) {
-  BMPGray8 _bmp;
-  _bmp.pixels = signalIO.bmp;
-  loadBMPGray8(signalIO.bmpName.c_str(),_bmp, 1.0, sizeof(signalIO.bmp));
-  
-  _bmp.pixels = signalIO.bmpLock;
-  loadBMPGray8(signalIO.bmpLockName.c_str(),_bmp, 1.0, sizeof(signalIO.bmpLock));
+void GUIManager::handleKeyInput(uint8_t keyValue) {
+    if(keyValue == 0x1F) return;
+    if (!GUIElement::head) return;
+
+    if (!currentSelected) {
+        currentSelected = GUIElement::head;
+        currentSelected->isSelected = true;
+        currentSelected->isRefresh = true;
+        currentSelected->draw();
+        return;
+    }
+
+    GUIElement* prevSelected = currentSelected;
+
+    //是否允许离开
+    uint8_t isExit = prevSelected->info.onInsert(reinterpret_cast<void*>((uintptr_t)(keyValue)));
+
+    // 确认切换
+    if(isExit!=2)
+    {
+      prevSelected->isSelected = false;
+      prevSelected->isRefresh = true;
+      prevSelected->draw();
+    }
+    
+    if (isExit == 0) {
+      // 进入新元素
+      // 尝试选择下一个
+      GUIElement* nextSelected = (keyValue & 0x01) == 0 ? currentSelected->prev :
+                                (keyValue & 0x08) == 0 ? currentSelected->next :
+                                nullptr;
+
+      if (!nextSelected) return;
+      nextSelected->info.onInsert(reinterpret_cast<void*>((uintptr_t)(0x80 | keyValue)));
+      currentSelected = nextSelected;
+    }
+    
+    currentSelected->isSelected = true;
+    currentSelected->isRefresh = true;
+    currentSelected->draw();
 }
 
-void refreshIcons() {
-  for (int i = 0; i < ICON_COUNT; i++) {
-    int x = 0;
-    int y = i * 20;
-    gfx->drawGrayWithColorBitmap(x, y, 
-      signalIO.Info[i].lock ? signalIO.bmpLock : signalIO.bmp,
-      signalIO.Info[i].color, signalIO.width, signalIO.height);
-
-    gui.bmpStringWithColor(22, y, String(signalIO.Info[i].label),RGB565_WHITE);
-  }
-}

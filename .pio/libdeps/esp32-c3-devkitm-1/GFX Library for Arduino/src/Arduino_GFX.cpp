@@ -1607,9 +1607,55 @@ void Arduino_GFX::draw16bitBeRGBBitmap(int16_t x, int16_t y,
   }
   endWrite();
 }
+static uint16_t alpha_blend_rgb565(uint32_t fg_rgb888, uint32_t bg_rgb888, uint8_t gray) {
+    float alpha = gray / 255.0f;
+
+    uint8_t fg_r = (fg_rgb888 >> 16) & 0xFF;
+    uint8_t fg_g = (fg_rgb888 >> 8) & 0xFF;
+    uint8_t fg_b = fg_rgb888 & 0xFF;
+
+    uint8_t bg_r = (bg_rgb888 >> 16) & 0xFF;
+    uint8_t bg_g = (bg_rgb888 >> 8) & 0xFF;
+    uint8_t bg_b = bg_rgb888 & 0xFF;
+
+    uint8_t out_r = fg_r * alpha + bg_r * (1 - alpha);
+    uint8_t out_g = fg_g * alpha + bg_g * (1 - alpha);
+    uint8_t out_b = fg_b * alpha + bg_b * (1 - alpha);
+
+    return RGB565(out_r, out_g, out_b);
+}
+
+void Arduino_GFX::drawGrayWithColorBitmap(int16_t x, int16_t y, uint8_t *bmp, uint16_t overlayColor, uint16_t backgroundColor, int16_t w, int16_t h)
+{
+  if(overlayColor == RGB565_BLACK)
+  {
+    fillRect(x, y, w, h, RGB565_BLACK);
+    return;
+  }
+
+  int32_t offset = 0;
+  uint32_t colorfg = RGB16TO24(overlayColor);
+  uint32_t colorbg = RGB16TO24(backgroundColor);
+  startWrite();
+  for (int16_t j = 0; j < h; j++, y++)
+  {
+    for (int16_t i = 0; i < w; i++)
+    {
+      uint16_t color16 = alpha_blend_rgb565(colorfg, colorbg, bmp[offset++]);
+      writePixel(x + i, y, color16);
+    }
+  }
+  endWrite();
+}
 
 void Arduino_GFX::drawGrayWithColorBitmap(int16_t x, int16_t y, uint8_t *bmp, uint16_t overlayColor, int16_t w, int16_t h)
 {
+  if(overlayColor == RGB565_BLACK)
+  {
+    fillRect(x, y, w, h, RGB565_BLACK);
+    return;
+  }
+
   int32_t offset = 0;
   startWrite();
   for (int16_t j = 0; j < h; j++, y++)

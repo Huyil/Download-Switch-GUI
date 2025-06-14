@@ -51,3 +51,20 @@ BatteryRaw ioI2C_readBattery()
 
   return result;
 }
+
+IORaw ioI2C_readIO()
+{// Step 1: 读取 I2C 状态
+    IORaw ioset;
+    Wire.beginTransmission(SLAVE_ADDR);
+    Wire.write(0x02); // 地址 0x02 读取 IO 状态
+    Wire.endTransmission(false);
+    Wire.requestFrom(SLAVE_ADDR, 4);
+    if (Wire.available() == 4) {
+        *(uint8_t*)&ioset.ch[0] = Wire.read();           // lo byte
+        *(uint8_t*)&ioset.ch[1] = Wire.read();
+        *(uint8_t*)&ioset.ch[2] = Wire.read();
+        *(uint8_t*)&ioset.ch[3] = Wire.read();
+    }
+
+    return ioset;
+}

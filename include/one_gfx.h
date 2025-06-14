@@ -33,10 +33,10 @@ struct GUIElementInfo {
     float scale;
     uint8_t width;
     uint8_t height;
-    void (*onInsert)(void*);
+    uint8_t (*onInsert)(void*);
 
     GUIElementInfo(const char* p, float s = 1.0f, uint8_t* buf = nullptr, size_t size = 0,
-                   void(*insertFunc)(void*) = nullptr, uint8_t w = 0, uint8_t h = 0)
+                   uint8_t(*insertFunc)(void*) = nullptr, uint8_t w = 0, uint8_t h = 0)
         : path(p), buffer(buf), bufferSize(size), width(w), height(h), scale(s), onInsert(insertFunc){}
 
     void setScale(float s) {
@@ -65,7 +65,7 @@ struct GUIElement {
     // 主构造函数
     GUIElement(int16_t _x, int16_t _y, 
                const char* path = "/error.bmp", 
-               void (*_onInsert)(void*) = nullptr,
+               uint8_t (*_onInsert)(void*) = nullptr,
                uint16_t _color = RGB565_WHITE,
                float scale = 1.0f,
                uint8_t* buffer = nullptr,
@@ -76,8 +76,7 @@ struct GUIElement {
           isShow(true),
           isRefresh(true),
           isLoad(false),
-          id(nextId++),  // 分配新ID
-          next(nullptr)//, prev(nullptr)
+          id(nextId++)  // 分配新ID
         {
             if(!_onInsert) return;
             if (!head) {
@@ -133,50 +132,27 @@ struct GUIElement {
         isRefresh = true; // 缩放变了需要刷新
     }
 
-    
+    void load(void) {
+        isShow = 0;
+        isRefresh = true;
+        draw();
+        isShow=true;
+    }
     // 使用当前成员绘制
     void draw(void);
+    void clear(void);
 };
 
 // 图像管理类
 class GUIManager {
 private:
+public:
     // 屏幕驱动
     Arduino_GFX* gfx;
-public:
     GUIElement* currentSelected; // 当前选中的元素指针
     GUIManager(Arduino_GFX* gfxInstance): gfx(gfxInstance){};
     // 处理按键输入并更新选中元素
-    uint8_t handleKeyInput(uint8_t keyValue) {
-        if (!GUIElement::head) return 0; // 空链表直接返回
-
-        // 初始化当前选中（如果为空）
-        if (!currentSelected) {
-            currentSelected = GUIElement::head;
-            currentSelected->isRefresh = true;
-            return 0;
-        }
-
-        GUIElement* prevSelected = currentSelected;
-
-        // 按键处理逻辑
-        if ((keyValue & 0x01) == 0) { // 上键
-            currentSelected = currentSelected->prev;
-        } else if ((keyValue & 0x08) == 0) { // 下键
-            currentSelected = currentSelected->next;
-        }
-
-        // 更新刷新状态
-        if (prevSelected != currentSelected) {
-            prevSelected->isRefresh = true;
-            currentSelected->isRefresh = true;
-
-            prevSelected->isSelected = false;
-            currentSelected->isSelected = true;
-            return 1;
-        }
-        return 0;
-    }
+    void handleKeyInput(uint8_t keyValue);
 
     // 绘图
     void lcd_init();
